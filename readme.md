@@ -5,13 +5,17 @@ Notes on how a ffi export works in GHC. Who allocates nurseries?
 
 Compiling this file
 
-```
+```haskell
 {-# language ForeignFunctionInterface #-}
 module Export where
 
 import Fun (foo)
 
 foreign export ccall "c_function" foo :: Int -> IO Int
+```
+
+```
+The Glorious Glasgow Haskell Compilation System, version 9.2.2
 ```
 
 ```
@@ -54,13 +58,15 @@ the rts gets ready to execute some haskell code on the current thread
         - is there a spare `InCall`? use it otherwise
           make a new one. set it up with the current task
 - calls `waitForCapability`:
+
+    a capability has a nursery already assigned to it, either at RTS
+    startup (`initStorage`) or when changing the no of capabilites
+    (`setNumCapabilities`)
+
     - calls `find_capability_for_task`:
         - finds a suitable capability for this task. trying to find one
           that is not busy and taking into account the numa node if we care
           about that
-    - a capability has a nursery already assigned to it, either at RTS
-      startup (`initStorage`) or when changing the no of capabilites
-      (`setNumCapabilities`)
 
 
 ```
