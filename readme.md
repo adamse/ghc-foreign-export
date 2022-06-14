@@ -1,10 +1,21 @@
 # How is a ffi export compiled/called?
 
 
+Notes on how a ffi export works in GHC. Who allocates nurseries?
+
+Compiling this file
+
+```
+{-# language ForeignFunctionInterface #-}
+module Export where
+
+import Fun (foo)
+
+foreign export ccall "c_function" foo :: Int -> IO Int
 ```
 
-compilation IS NOT required
-compilation IS NOT required
+```
+    objdump -r -j .init_array Export.o
 
 Export.o:     file format elf64-x86-64
 
@@ -13,9 +24,9 @@ OFFSET           TYPE              VALUE
 0000000000000000 R_X86_64_64       .text+0x00000000000000c0
 
 
+    objdump -M intel -r --disassemble Export.o
 
 Export.o:     file format elf64-x86-64
-
 
 Disassembly of section .text:
 
@@ -33,20 +44,26 @@ Disassembly of section .text:
   19:	48 89 45 f8          	mov    QWORD PTR [rbp-0x8],rax
   1d:	31 c0                	xor    eax,eax
 
-                            call rts_lock, what are we locking? not so much
-                            locking but this is where the rts gets ready to
-                            execute some haskell code on the current thread
+    call rts_lock, what are we locking? not so much locking but this is where
+    the rts gets ready to execute some haskell code on the current thread
 
-                            - calls newBoundTask:
-                                - get task for thread, getMyTask
-                                    - if there is a task for the thread use it, otherwise
-                                    - make a new task, newTask
-                                - set stopped status to false
-                                - newInCall:
-                                    - is there a spare InCall? use it otherwise
-                                      make a new one. set it up with the current task
-                            - calls waitForCapability:
-                                -
+    - calls newBoundTask:
+        - get task for thread, getMyTask
+            - if there is a task for the thread use it, otherwise
+            - make a new task, newTask
+        - set stopped status to false
+        - newInCall:
+            - is there a spare InCall? use it otherwise
+              make a new one. set it up with the current task
+    - calls waitForCapability:
+        - calls find_capability_for_task:
+            - finds a suitable capability for this task. trying to find one
+              that is not busy and taking into account the numa node if we care
+              about that
+        - a capability has a nursery already assigned to it, either at RTS
+          startup (initStorage) or when changing the no of capabilites
+          (setNumCapabilities)
+
 
   1f:	e8 00 00 00 00       	call   24 <c_function+0x24>
 			20: R_X86_64_PLT32	rts_lock-0x4
