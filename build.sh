@@ -11,6 +11,6 @@ comp Export.hs
 
 ( 
     objdump -r -j .init_array Export.o
-    objdump -r --disassemble Export.o
+    objdump -M intel -r --disassemble Export.o
 ) | \
     less
