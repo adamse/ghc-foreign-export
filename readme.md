@@ -15,14 +15,6 @@ foreign export ccall "c_function" foo :: Int -> IO Int
 ```
 
 ```
-    objdump -r -j .init_array Export.o
-
-Export.o:     file format elf64-x86-64
-
-RELOCATION RECORDS FOR [.init_array]:
-OFFSET           TYPE              VALUE
-0000000000000000 R_X86_64_64       .text+0x00000000000000c0
-
 
     objdump -M intel -r --disassemble Export.o
 
@@ -43,31 +35,35 @@ Disassembly of section .text:
                                                     -- store the thread local
   19:	48 89 45 f8          	mov    QWORD PTR [rbp-0x8],rax
   1d:	31 c0                	xor    eax,eax
+```
 
-    call rts_lock, what are we locking? not so much locking but this is where
-    the rts gets ready to execute some haskell code on the current thread
-
-    - calls newBoundTask:
-        - get task for thread, getMyTask
-            - if there is a task for the thread use it, otherwise
-            - make a new task, newTask
-        - set stopped status to false
-        - newInCall:
-            - is there a spare InCall? use it otherwise
-              make a new one. set it up with the current task
-    - calls waitForCapability:
-        - calls find_capability_for_task:
-            - finds a suitable capability for this task. trying to find one
-              that is not busy and taking into account the numa node if we care
-              about that
-        - a capability has a nursery already assigned to it, either at RTS
-          startup (initStorage) or when changing the no of capabilites
-          (setNumCapabilities)
-
-
+```
   1f:	e8 00 00 00 00       	call   24 <c_function+0x24>
 			20: R_X86_64_PLT32	rts_lock-0x4
+```
 
+call `rts_lock`, what are we locking? not so much locking but this is where
+the rts gets ready to execute some haskell code on the current thread
+
+- calls newBoundTask:
+    - get task for thread, `getMyTask`
+        - if there is a task for the thread use it, otherwise
+        - make a new task, `newTask`
+    - set stopped status to false
+    - `newInCall`:
+        - is there a spare `InCall`? use it otherwise
+          make a new one. set it up with the current task
+- calls `waitForCapability`:
+    - calls `find_capability_for_task`:
+        - finds a suitable capability for this task. trying to find one
+          that is not busy and taking into account the numa node if we care
+          about that
+    - a capability has a nursery already assigned to it, either at RTS
+      startup (`initStorage`) or when changing the no of capabilites
+      (`setNumCapabilities`)
+
+
+```
   24:	48 89 45 e0          	mov    QWORD PTR [rbp-0x20],rax
   28:	48 8b 45 e0          	mov    rax,QWORD PTR [rbp-0x20]
   2c:	48 8b 55 d8          	mov    rdx,QWORD PTR [rbp-0x28]
@@ -120,7 +116,9 @@ Disassembly of section .text:
 			ba: R_X86_64_PLT32	__stack_chk_fail-0x4
   be:	c9                   	leave
   bf:	c3                   	ret
+```
 
+```
 00000000000000c0 <stginit_export_Export>:
   c0:	f3 0f 1e fa          	endbr64
   c4:	55                   	push   rbp
@@ -132,4 +130,15 @@ Disassembly of section .text:
   d2:	90                   	nop
   d3:	5d                   	pop    rbp
   d4:	c3                   	ret
+
+```
+
+```
+    objdump -r -j .init_array Export.o
+
+Export.o:     file format elf64-x86-64
+
+RELOCATION RECORDS FOR [.init_array]:
+OFFSET           TYPE              VALUE
+0000000000000000 R_X86_64_64       .text+0x00000000000000c0
 ```
