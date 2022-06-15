@@ -1,7 +1,6 @@
 # How is a ffi export compiled/called?
 
-
-Notes on how a ffi export works in GHC. Who allocates nurseries?
+Dissection of an FFI export in GHC.
 
 Compiling this file
 
@@ -31,6 +30,8 @@ Disassembly of section .text:
    4:	55                   	push   rbp
    5:	48 89 e5             	mov    rbp,rsp
    8:	48 83 ec 30          	sub    rsp,0x30
+
+                                                    -- store the argument on the stack
    c:	48 89 7d d8          	mov    QWORD PTR [rbp-0x28],rdi
 
                                                     -- load some thread local
@@ -46,10 +47,11 @@ Disassembly of section .text:
 			20: R_X86_64_PLT32	rts_lock-0x4
 ```
 
-call `rts_lock`, what are we locking? not so much locking but this is where
-the rts gets ready to execute some haskell code on the current thread
+call `rts_lock`, what are we locking? we are locking a capability but we also
+do some other stuff: this is where the rts gets ready to execute some haskell
+code on the current thread
 
-- calls newBoundTask:
+- call `newBoundTask`:
     - get task for thread, `getMyTask`
         - if there is a task for the thread use it, otherwise
         - make a new task, `newTask`
@@ -57,47 +59,97 @@ the rts gets ready to execute some haskell code on the current thread
     - `newInCall`:
         - is there a spare `InCall`? use it otherwise
           make a new one. set it up with the current task
-- calls `waitForCapability`:
+
+- call `waitForCapability`:
 
     a capability has a nursery already assigned to it, either at RTS
     startup (`initStorage`) or when changing the no of capabilites
     (`setNumCapabilities`)
 
-    - calls `find_capability_for_task`:
+    - call `find_capability_for_task`:
         - finds a suitable capability for this task. trying to find one
           that is not busy and taking into account the numa node if we care
           about that
 
+    - locks the capability (waiting here if we didn't find a free one)
+
+- finally returns the found capability
 
 ```
+                                                    -- store the capability
   24:	48 89 45 e0          	mov    QWORD PTR [rbp-0x20],rax
+
+                                                    -- load the capability, this seems silly?
   28:	48 8b 45 e0          	mov    rax,QWORD PTR [rbp-0x20]
   2c:	48 8b 55 d8          	mov    rdx,QWORD PTR [rbp-0x28]
+
+                                                    -- silly register moves...
+                                                    -- could've just loaded them
+                                                    -- correctly above?
+
+                                                    -- arg1 = cap
+                                                    -- arg2 = the int argument
   30:	48 89 d6             	mov    rsi,rdx
   33:	48 89 c7             	mov    rdi,rax
+
+                                                    -- rts_mkInt constructs a
+                                                    -- haskell Int from a c int64_t
   36:	e8 00 00 00 00       	call   3b <c_function+0x3b>
 			37: R_X86_64_PLT32	rts_mkInt-0x4
+
   3b:	48 89 c2             	mov    rdx,rax
   3e:	48 8b 45 e0          	mov    rax,QWORD PTR [rbp-0x20]
+
+                                                    -- load the foo closure address
   42:	be 00 00 00 00       	mov    esi,0x0
 			43: R_X86_64_32	Export_zdfstableZZC0ZZCmainZZCExportZZCfoo_closure
+
+                                                    -- call rts_apply(cap, foo_closure, int)
+                                                    -- allocates a closure that will apply the
+                                                    -- given closure to the argument when evaled
   47:	48 89 c7             	mov    rdi,rax
   4a:	e8 00 00 00 00       	call   4f <c_function+0x4f>
 			4b: R_X86_64_PLT32	rts_apply-0x4
+
   4f:	48 89 c2             	mov    rdx,rax
   52:	48 8b 45 e0          	mov    rax,QWORD PTR [rbp-0x20]
+
+                                                    -- load GHC.TopHandler.runIO closure, wraps the
+                                                    -- IO action in an exception handler
   56:	be 00 00 00 00       	mov    esi,0x0
 			57: R_X86_64_32	base_GHCziTopHandler_runIO_closure
+
   5b:	48 89 c7             	mov    rdi,rax
+
+                                                    -- call rts_apply(cap, runIO_closure, result_of_apply_foo)
   5e:	e8 00 00 00 00       	call   63 <c_function+0x63>
 			5f: R_X86_64_PLT32	rts_apply-0x4
+
   63:	48 89 c1             	mov    rcx,rax
-  66:	48 8d 55 e8          	lea    rdx,[rbp-0x18]
+  66:	48 8d 55 e8          	lea    rdx,[rbp-0x18] -- return_slot
   6a:	48 8d 45 e0          	lea    rax,[rbp-0x20]
-  6e:	48 89 ce             	mov    rsi,rcx
-  71:	48 89 c7             	mov    rdi,rax
+  6e:	48 89 ce             	mov    rsi,rcx -- silly move
+  71:	48 89 c7             	mov    rdi,rax -- silly move
+```
+
+```
+                                                    -- call rts_inCall(cap, io_action, return_slot)
   74:	e8 00 00 00 00       	call   79 <c_function+0x79>
 			75: R_X86_64_PLT32	rts_inCall-0x4
+```
+
+`rts_inCall`: "is similar to `rts_evalIO`, but expects to be called as an incall" (incall means
+called from foreign code, just like we're doing here).
+
+- call `createStrictIOThread`: like `createIOThread` but also evaluates the result to whnf
+
+    - call `createThread`, creating a new TSO and _allocating_ a new stack
+    - push some closures onto the new stack, among them our IO action and `stg_forceIO_info` to eval
+      the result
+
+
+
+```
   79:	48 8b 45 e0          	mov    rax,QWORD PTR [rbp-0x20]
   7d:	48 89 c6             	mov    rsi,rax
   80:	bf 00 00 00 00       	mov    edi,0x0
